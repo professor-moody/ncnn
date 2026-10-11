@@ -7,6 +7,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <limits>
 #include <unordered_map>
 
 #include "pass_tnn/fuse_shape_size.h"
@@ -126,6 +127,7 @@ static size_t type_to_elemsize(int type)
     if (type == 10) return 8;
     if (type == 11) return 16;
     if (type == 12) return 4;
+    if (type == 13) return 2; // bf16
     return 0; // null
 }
 
@@ -167,21 +169,44 @@ Attribute::Attribute(FILE* bp)
     int datatype;
     int length;
     int ndim;
-    fread(&magic, 1, sizeof(unsigned int), bp);
-    fread(&datatype, 1, sizeof(int), bp);
-    fread(&length, 1, sizeof(int), bp);
-    fread(&ndim, 1, sizeof(int), bp);
+    if (fread(&magic, 1, sizeof(unsigned int), bp) != sizeof(unsigned int)
+        || fread(&datatype, 1, sizeof(int), bp) != sizeof(int)
+        || fread(&length, 1, sizeof(int), bp) != sizeof(int)
+        || fread(&ndim, 1, sizeof(int), bp) != sizeof(int))
+    {
+        fprintf(stderr, "truncated tnn attribute header\n");
+        valid = false;
+        return;
+    }
 
     type = get_tnn_tensor_type(datatype);
+    const size_t element_size = type_to_elemsize(type);
+    if (element_size == 0 || length < 0 || ndim < 0)
+    {
+        fprintf(stderr, "invalid tnn attribute datatype=%d length=%d ndim=%d\n", datatype, length, ndim);
+        valid = false;
+        return;
+    }
 
     if (ndim == 0)
     {
         shape = {1};
 
-        data.resize(type_to_elemsize(type));
+        const size_t expected_size = element_size;
+        if ((size_t)length != expected_size)
+        {
+            fprintf(stderr, "tnn attribute length %d does not match expected size %zu\n", length, expected_size);
+            valid = false;
+            return;
+        }
 
-        // assert length == type_to_elemsize(type)
-        fread((void*)data.data(), 1, length, bp);
+        data.resize(expected_size);
+        if (fread((void*)data.data(), 1, expected_size, bp) != expected_size)
+        {
+            fprintf(stderr, "truncated tnn attribute data\n");
+            data.clear();
+            valid = false;
+        }
 
         return;
     }
@@ -189,13 +214,49 @@ Attribute::Attribute(FILE* bp)
     shape.resize(ndim);
     for (int i = 0; i < ndim; i++)
     {
-        fread(&shape[i], 1, sizeof(int), bp);
+        if (fread(&shape[i], 1, sizeof(int), bp) != sizeof(int) || shape[i] < 0)
+        {
+            fprintf(stderr, "invalid tnn attribute shape\n");
+            shape.clear();
+            valid = false;
+            return;
+        }
     }
 
-    data.resize(elemcount() * type_to_elemsize(type));
+    size_t element_count = 1;
+    for (int dim : shape)
+    {
+        if (dim != 0 && element_count > std::numeric_limits<size_t>::max() / (size_t)dim)
+        {
+            fprintf(stderr, "tnn attribute shape overflows size_t\n");
+            valid = false;
+            return;
+        }
+        element_count *= (size_t)dim;
+    }
 
-    // assert length == elemcount() * type_to_elemsize(type)
-    fread((void*)data.data(), 1, length, bp);
+    if (element_count > std::numeric_limits<size_t>::max() / element_size)
+    {
+        fprintf(stderr, "tnn attribute byte size overflows size_t\n");
+        valid = false;
+        return;
+    }
+
+    const size_t expected_size = element_count * element_size;
+    if ((size_t)length != expected_size)
+    {
+        fprintf(stderr, "tnn attribute length %d does not match expected size %zu\n", length, expected_size);
+        valid = false;
+        return;
+    }
+
+    data.resize(expected_size);
+    if (fread((void*)data.data(), 1, expected_size, bp) != expected_size)
+    {
+        fprintf(stderr, "truncated tnn attribute data\n");
+        data.clear();
+        valid = false;
+    }
 }
 
 int load_tnn(const std::string& tnnpath, Graph& pnnx_graph,
@@ -546,19 +607,23 @@ int load_tnn(const std::string& tnnpath, Graph& pnnx_graph,
         Operator* op = op_map.at(name);
 
         std::vector<Attribute> attrs;
+        const auto read_attribute = [bp](std::vector<Attribute>& values) {
+            values.push_back(Attribute(bp));
+            return values.back().valid;
+        };
 
         if (type == "Add" || type == "Sub" || type == "Mul" || type == "Div")
         {
-            attrs.push_back(Attribute(bp));
+            if (!read_attribute(attrs)) { fclose(bp); return -1; }
         }
         if (type == "BatchNormCxx")
         {
-            attrs.push_back(Attribute(bp));
-            attrs.push_back(Attribute(bp));
+            if (!read_attribute(attrs)) { fclose(bp); return -1; }
+            if (!read_attribute(attrs)) { fclose(bp); return -1; }
         }
         if (type == "ConstantOfShape")
         {
-            attrs.push_back(Attribute(bp));
+            if (!read_attribute(attrs)) { fclose(bp); return -1; }
         }
         if (type == "Convolution1D" || type == "Convolution")
         {
@@ -573,10 +638,10 @@ int load_tnn(const std::string& tnnpath, Graph& pnnx_graph,
             int bias;
             fread(&bias, 1, sizeof(int), bp);
 
-            attrs.push_back(Attribute(bp));
+            if (!read_attribute(attrs)) { fclose(bp); return -1; }
             if (bias)
             {
-                attrs.push_back(Attribute(bp));
+                if (!read_attribute(attrs)) { fclose(bp); return -1; }
             }
         }
         if (type == "Gather")
@@ -587,7 +652,7 @@ int load_tnn(const std::string& tnnpath, Graph& pnnx_graph,
 
             if (data_in_resource)
             {
-                attrs.push_back(Attribute(bp));
+                if (!read_attribute(attrs)) { fclose(bp); return -1; }
             }
 
             // indices_in_resource
@@ -596,7 +661,7 @@ int load_tnn(const std::string& tnnpath, Graph& pnnx_graph,
 
             if (indices_in_resource)
             {
-                attrs.push_back(Attribute(bp));
+                if (!read_attribute(attrs)) { fclose(bp); return -1; }
             }
         }
         if (type == "InnerProduct")
@@ -608,12 +673,12 @@ int load_tnn(const std::string& tnnpath, Graph& pnnx_graph,
             name2.resize(name2_size);
             fread((void*)name2.data(), 1, name2_size, bp);
 
-            attrs.push_back(Attribute(bp));
-            attrs.push_back(Attribute(bp));
+            if (!read_attribute(attrs)) { fclose(bp); return -1; }
+            if (!read_attribute(attrs)) { fclose(bp); return -1; }
         }
         if (type == "MatMul")
         {
-            attrs.push_back(Attribute(bp));
+            if (!read_attribute(attrs)) { fclose(bp); return -1; }
         }
 
         const int attribute_count = (int)attrs.size();
@@ -659,12 +724,15 @@ int load_tnn(const std::string& tnnpath, Graph& pnnx_graph,
         {
             // FIXME
             Attribute skip(bp);
+            if (!skip.valid) { fclose(bp); return -1; }
             continue;
         }
 
         Operator* op_constant = op_map.at(name);
 
-        op_constant->attrs["data"] = Attribute(bp);
+        Attribute attr(bp);
+        if (!attr.valid) { fclose(bp); return -1; }
+        op_constant->attrs["data"] = attr;
     }
 
     fclose(bp);

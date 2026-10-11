@@ -257,6 +257,9 @@ public:
     std::vector<char> data;
 
     std::map<std::string, Parameter> params;
+
+    // Set false when a serialized attribute cannot be decoded completely.
+    bool valid = true;
 };
 
 bool operator==(const Attribute& lhs, const Attribute& rhs);
