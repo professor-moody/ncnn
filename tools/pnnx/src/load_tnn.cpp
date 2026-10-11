@@ -128,7 +128,7 @@ static size_t type_to_elemsize(int type)
     if (type == 11) return 16;
     if (type == 12) return 4;
     if (type == 13) return 2; // bf16
-    return 0; // null
+    return 0;                 // null
 }
 
 static int get_tnn_tensor_type(int dt)
@@ -170,9 +170,9 @@ Attribute::Attribute(FILE* bp)
     int length;
     int ndim;
     if (fread(&magic, 1, sizeof(unsigned int), bp) != sizeof(unsigned int)
-        || fread(&datatype, 1, sizeof(int), bp) != sizeof(int)
-        || fread(&length, 1, sizeof(int), bp) != sizeof(int)
-        || fread(&ndim, 1, sizeof(int), bp) != sizeof(int))
+            || fread(&datatype, 1, sizeof(int), bp) != sizeof(int)
+            || fread(&length, 1, sizeof(int), bp) != sizeof(int)
+            || fread(&ndim, 1, sizeof(int), bp) != sizeof(int))
     {
         fprintf(stderr, "truncated tnn attribute header\n");
         valid = false;
@@ -614,16 +614,32 @@ int load_tnn(const std::string& tnnpath, Graph& pnnx_graph,
 
         if (type == "Add" || type == "Sub" || type == "Mul" || type == "Div")
         {
-            if (!read_attribute(attrs)) { fclose(bp); return -1; }
+            if (!read_attribute(attrs))
+            {
+                fclose(bp);
+                return -1;
+            }
         }
         if (type == "BatchNormCxx")
         {
-            if (!read_attribute(attrs)) { fclose(bp); return -1; }
-            if (!read_attribute(attrs)) { fclose(bp); return -1; }
+            if (!read_attribute(attrs))
+            {
+                fclose(bp);
+                return -1;
+            }
+            if (!read_attribute(attrs))
+            {
+                fclose(bp);
+                return -1;
+            }
         }
         if (type == "ConstantOfShape")
         {
-            if (!read_attribute(attrs)) { fclose(bp); return -1; }
+            if (!read_attribute(attrs))
+            {
+                fclose(bp);
+                return -1;
+            }
         }
         if (type == "Convolution1D" || type == "Convolution")
         {
@@ -638,10 +654,18 @@ int load_tnn(const std::string& tnnpath, Graph& pnnx_graph,
             int bias;
             fread(&bias, 1, sizeof(int), bp);
 
-            if (!read_attribute(attrs)) { fclose(bp); return -1; }
+            if (!read_attribute(attrs))
+            {
+                fclose(bp);
+                return -1;
+            }
             if (bias)
             {
-                if (!read_attribute(attrs)) { fclose(bp); return -1; }
+                if (!read_attribute(attrs))
+                {
+                    fclose(bp);
+                    return -1;
+                }
             }
         }
         if (type == "Gather")
@@ -652,7 +676,11 @@ int load_tnn(const std::string& tnnpath, Graph& pnnx_graph,
 
             if (data_in_resource)
             {
-                if (!read_attribute(attrs)) { fclose(bp); return -1; }
+                if (!read_attribute(attrs))
+                {
+                    fclose(bp);
+                    return -1;
+                }
             }
 
             // indices_in_resource
@@ -661,7 +689,11 @@ int load_tnn(const std::string& tnnpath, Graph& pnnx_graph,
 
             if (indices_in_resource)
             {
-                if (!read_attribute(attrs)) { fclose(bp); return -1; }
+                if (!read_attribute(attrs))
+                {
+                    fclose(bp);
+                    return -1;
+                }
             }
         }
         if (type == "InnerProduct")
@@ -673,12 +705,24 @@ int load_tnn(const std::string& tnnpath, Graph& pnnx_graph,
             name2.resize(name2_size);
             fread((void*)name2.data(), 1, name2_size, bp);
 
-            if (!read_attribute(attrs)) { fclose(bp); return -1; }
-            if (!read_attribute(attrs)) { fclose(bp); return -1; }
+            if (!read_attribute(attrs))
+            {
+                fclose(bp);
+                return -1;
+            }
+            if (!read_attribute(attrs))
+            {
+                fclose(bp);
+                return -1;
+            }
         }
         if (type == "MatMul")
         {
-            if (!read_attribute(attrs)) { fclose(bp); return -1; }
+            if (!read_attribute(attrs))
+            {
+                fclose(bp);
+                return -1;
+            }
         }
 
         const int attribute_count = (int)attrs.size();
@@ -724,14 +768,22 @@ int load_tnn(const std::string& tnnpath, Graph& pnnx_graph,
         {
             // FIXME
             Attribute skip(bp);
-            if (!skip.valid) { fclose(bp); return -1; }
+            if (!skip.valid)
+            {
+                fclose(bp);
+                return -1;
+            }
             continue;
         }
 
         Operator* op_constant = op_map.at(name);
 
         Attribute attr(bp);
-        if (!attr.valid) { fclose(bp); return -1; }
+        if (!attr.valid)
+        {
+            fclose(bp);
+            return -1;
+        }
         op_constant->attrs["data"] = attr;
     }
 
